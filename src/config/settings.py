@@ -1,52 +1,24 @@
 """
-Runtime Application Configuration.
+Application Configuration Settings.
 
-Leverages Pydantic Settings for deterministic validation of environment inputs.
+Explicitly loads environment variables using python-dotenv.
 """
 
-from pathlib import Path
-from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+import os
+from dotenv import load_dotenv
+from pydantic_settings import BaseSettings
 
+# Force Python to load the .env file in the root directory
+load_dotenv()
 
 class Settings(BaseSettings):
-    """App settings populated via environment variables or .env file."""
+    PROJECT_NAME: str = "HMD Matrix Agentic Engine"
+    VERSION: str = "1.0.0"
+    API_V1_STR: str = "/api/v1"
+    ENVIRONMENT: str = "development"
+    DEBUG: bool = True
+    
+    REDIS_URL: str = os.getenv("REDIS_URL", "redis://localhost:6379")
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
 
-    # Project Information
-    PROJECT_NAME: str = Field(
-        default="HMD Matrix Agentic Engine",
-        description="Name of the agent engine instance.",
-    )
-    VERSION: str = Field(default="0.1.0", description="Semantic version number.")
-    ENVIRONMENT: str = Field(
-        default="development", description="Execution environment (development, staging, production)."
-    )
-    DEBUG: bool = Field(default=False, description="Enable verbose debug logging.")
-
-    # Core Distributed Infrastructure Defaults
-    REDIS_URL: str = Field(
-        default="redis://localhost:6379/0",
-        description="Connection URL for task distribution broker.",
-    )
-    WORKER_CONCURRENCY: int = Field(
-        default=4, description="Maximum concurrent agent processes per node."
-    )
-
-    # API Keys / External Provider Configs
-    OPENAI_API_KEY: str = Field(
-        default="", description="Secret key for LLM provider operations."
-    )
-
-    # Path Settings
-    BASE_DIR: Path = Path(__file__).resolve().parent.parent.parent
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore",
-    )
-
-
-# Global singleton instance for app-wide import
 settings = Settings()
