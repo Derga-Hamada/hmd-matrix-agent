@@ -1,61 +1,64 @@
 """
-Research Agent Implementation.
-
-This agent is responsible for deep-diving into topics, extracting core methodologies,
-and structuring raw information into digestible, analytical formats.
+Research Agent implementation using Google Gemini.
 """
 
+import json
+import logging
+from google import genai
+from google.genai import types
+from pydantic import BaseModel, Field
+
 from src.agents.base import BaseAgent
-from src.core.schemas import AgentRequest, AgentResponse
-from src.core.logger import logger
+from src.config.settings import settings
+
+logger = logging.getLogger("hmd_matrix")
+
+
+# Define the exact JSON schema required from Gemini
+class ResearchResult(BaseModel):
+    analyzed_topic: str = Field(description="The core topic analyzed.")
+    core_mechanism: str = Field(
+        description="A concise explanation of how the framework works."
+    )
+    effectiveness_score: str = Field(
+        description="A rating of its effectiveness (e.g., 'High', 'Medium') with a brief reason."
+    )
+    content_angles: list[str] = Field(
+        description="3-5 actionable angles for content creation based on the topic."
+    )
 
 
 class ResearchAgent(BaseAgent):
-    """
-    Autonomous agent specialized in data gathering and conceptual analysis.
-    """
 
-    def __init__(self, agent_name: str = "Research_Agent", model_version: str = "gpt-4-turbo"):
-        super().__init__(agent_name, model_version)
-        # Future integration: Initialize actual LLM client (e.g., LangChain ChatOpenAI) here.
-        # self.llm = ChatOpenAI(temperature=0.2, model=self.model_version)
+    def __init__(self, model_name: str = "gemini-2.5-flash"):
+        super().__init__(name="ResearchAgent")
+        self.model = model_name
 
-    async def execute(self, request: AgentRequest) -> AgentResponse:
-        """
-        Processes the research task and returns structured analytical data.
-        """
+        if not settings.GEMINI_API_KEY:
+            raise ValueError(
+                "GEMINI_API_KEY is empty! Please check your .env file."
+            )
+
+        self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
+        logger.info(f"Initializing ResearchAgent [Model: {self.model}]")
+
+    async def process(self, prompt: str) -> dict:
+        """Sends prompt to Gemini and enforces strict Pydantic JSON output."""
+        logger.info(f"Agent processing prompt: '{prompt}'")
+
         try:
-            logger.info(f"[{self.agent_name}] Initiating research workflow for task: {request.task_id}")
-
-            # 1. Architectural Prompt Engineering: System Context
-            # We hardcode the persona to enforce consistent, high-value outputs.
-            system_prompt = (
-                "You are an elite research analyst. Your objective is to deconstruct the "
-                "provided concept, evaluate its practical effectiveness, and structure the "
-                "data to appeal to a Generation Z audience focused on productivity and system optimization."
+            response = self.client.models.generate_content(
+                model=self.model,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction="You are an elite productivity and systems research analyst. Provide highly analytical, structured insights.",
+                    response_mime_type="application/json",
+                    response_schema=ResearchResult,
+                ),
             )
-            
-            logger.debug(f"[{self.agent_name}] Applying system instructions and analyzing prompt: '{request.prompt}'")
 
-            # 2. LLM Execution Simulation
-            # In a live environment, this is where we await self.llm.invoke(). 
-            # For this architectural phase, we establish the strict JSON structure the AI must return.
-            mock_llm_output = {
-                "analyzed_topic": request.prompt,
-                "core_mechanism": "Breaking work into fixed, non-negotiable time blocks.",
-                "effectiveness_score": "High - mitigates decision fatigue and burnout.",
-                "content_angles": ["How to avoid doom-scrolling", "The 2-hour daily deep work system"]
-            }
-
-            logger.info(f"[{self.agent_name}] Research successfully synthesized for task: {request.task_id}")
-
-            # 3. Return Strictly Typed Response
-            return AgentResponse(
-                task_id=request.task_id,
-                status="success",
-                result=mock_llm_output
-            )
+            return json.loads(response.text)
 
         except Exception as e:
-            # Safely catch any API timeouts or formatting errors
-            return await self._handle_error(request.task_id, e)
+            logger.error(f"Gemini LLM Processing failed: {str(e)}")
+            return {"error": f"Agent failed to generate a response: {str(e)}"}
