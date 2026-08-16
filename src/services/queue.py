@@ -35,7 +35,7 @@ class TaskQueue:
             logger.error(f"Error closing Redis connection: {str(e)}")
 
     def _to_dict(self, obj: Any) -> Any:
-        """Helper to convert Pydantic objects or non-dict structures into dicts."""
+        """Converts Pydantic models or nested objects to dicts."""
         if hasattr(obj, "model_dump"):
             return obj.model_dump()
         elif hasattr(obj, "dict"):
@@ -45,16 +45,11 @@ class TaskQueue:
         return obj
 
     async def push_task(self, queue_name: str, task_data: Any):
-        """Pushes a task payload into the specified Redis list queue."""
         dict_data = self._to_dict(task_data)
         await self.redis.rpush(queue_name, json.dumps(dict_data))
 
     async def enqueue_task(self, *args, **kwargs):
-        """
-        Flexible enqueue method to handle any positional, keyword, or Pydantic payloads.
-        """
         queue_name = kwargs.pop("queue_name", "agent_tasks")
-
         if len(args) == 1:
             task_data = self._to_dict(args[0])
         elif len(args) >= 2:
@@ -74,42 +69,51 @@ class TaskQueue:
         else:
             task_data = self._to_dict(kwargs if kwargs else {"data": args})
 
-        # Push payload to Redis list
         await self.redis.rpush(queue_name, json.dumps(task_data))
-
-        # Set initial status in Redis hash if task_id exists
         if isinstance(task_data, dict) and "task_id" in task_data:
-            await self.update_task_status(task_data["task_id"], "queued")
+            await self.update_task_status(task_data["task_id"], "processing")
 
     async def pop_task(self, queue_name: str = "agent_tasks"):
-        """Pops a task payload from the specified Redis list queue."""
         result = await self.redis.blpop(queue_name, timeout=2)
         if result:
             return json.loads(result[1])
         return None
 
     async def update_task_status(self, task_id: str, status: str):
-        """Updates the status field of a task in Redis cache."""
         await self.redis.hset(f"task:{task_id}", "status", status)
 
     async def get_task_status(self, task_id: str):
-        """Gets the status field of a task from Redis cache."""
         return await self.redis.hget(f"task:{task_id}", "status")
 
     async def get_task_result(self, task_id: str):
-        """Gets the result field of a task from Redis cache."""
         raw = await self.redis.hget(f"task:{task_id}", "result")
         return json.loads(raw) if raw else None
 
-    async def get_task(self, task_id: str):
-        """Gets both status and result for a task from Redis cache."""
-        status = await self.get_task_status(task_id)
-        result = await self.get_task_result(task_id)
-        if not status and not result:
+    async def get_result(self, task_id: str):
+        """Fetches status and result formatted for main.py GET route."""
+        status = await self.redis.hget(f"task:{task_id}", "status")
+        raw_result = await self.redis.hget(f"task:{task_id}", "result")
+        
+        if not status and not raw_result:
             return None
-        return {"task_id": task_id, "status": status, "result": result}
+
+        parsed_result = None
+        if raw_result:
+            try:
+                parsed_result = json.loads(raw_result)
+            except Exception:
+                parsed_result = raw_result
+
+        return {
+            "task_id": task_id,
+            "status": status or "processing",
+            "result": parsed_result
+        }
+
+    async def get_task(self, task_id: str):
+        return await self.get_result(task_id)
 
     async def save_task_result(self, task_id: str, result: dict):
-        """Saves the final task output and marks status as completed in Redis cache."""
-        await self.redis.hset(f"task:{task_id}", "status", "completed")
+        # Saved as "success" to satisfy FastAPI Pydantic schema validation regex: ^(success|failed|processing)$
+        await self.redis.hset(f"task:{task_id}", "status", "success")
         await self.redis.hset(f"task:{task_id}", "result", json.dumps(result))

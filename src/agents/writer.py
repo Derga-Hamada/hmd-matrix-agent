@@ -21,12 +21,11 @@ class VideoScriptResult(BaseModel):
 
 
 class WriterAgent(BaseAgent):
-    def __init__(self, model_name: str = "gemini-2.5-flash"):
+    def __init__(self, model_name: str = "gemini-flash-latest"):
         super().__init__(name="WriterAgent")
         self.model = model_name
         self.client = genai.Client(api_key=settings.GEMINI_API_KEY)
         logger.info(f"Initializing WriterAgent [Model: {self.model}]")
-
     async def process(self, prompt: str) -> dict:
         """Transforms structured research data into a video script."""
         logger.info("WriterAgent generating video script...")

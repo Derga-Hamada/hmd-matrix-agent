@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 .pytest_cache/
 .dist/
+venv/
+__pycache__/
+.env
+hmd_matrix.db
+.DS_Store

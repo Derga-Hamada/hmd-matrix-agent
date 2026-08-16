@@ -1,79 +1,100 @@
 """
-FastAPI Application Gateway.
-
-Acts as the primary entry point for external HTTP traffic, routing validated 
-requests to the internal asynchronous Redis task queue.
+FastAPI Application Entrypoint for HMD Matrix Agentic Engine.
+Exposes endpoints for enqueuing tasks, checking task state in Redis, 
+and querying permanent task history from SQLite.
 """
-
+import logging
+from typing import Dict, Any, Optional
 from fastapi import FastAPI, HTTPException, status
-from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field
 
-from src.config.settings import settings
-from src.core.logger import logger
-from src.core.schemas import AgentRequest, AgentResponse
 from src.services.queue import TaskQueue
+from src.services.database import get_all_task_history, get_task_history_by_id
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger("hmd_matrix")
 
 app = FastAPI(
-    title=settings.PROJECT_NAME,
-    version=settings.VERSION,
-    description="API Gateway for the distributed AI agent architecture.",
-    docs_url="/docs",
+    title="HMD Matrix Agentic Engine API",
+    description="Asynchronous multi-agent content generation engine with Redis queue and SQLite persistence.",
+    version="1.0.0",
 )
 
-# Initialize the task queue connection globally
-task_queue = TaskQueue(settings.REDIS_URL)
+queue = TaskQueue()
+
 
 @app.on_event("startup")
 async def startup_event():
-    """Executes necessary setup when the server boots."""
-    logger.info(f"Starting {settings.PROJECT_NAME} in {settings.ENVIRONMENT} mode.")
-    await task_queue.connect()
+    """Connect to Redis queue service on startup."""
+    logger.info("Starting HMD Matrix Agentic Engine in development mode.")
+    await queue.connect()
+
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Cleans up connections when the server stops."""
-    await task_queue.close()
+    """Close Redis queue connection on shutdown."""
+    await queue.close()
 
-@app.get("/health")
-async def health_check():
-    """Simple health check endpoint."""
-    return {"status": "healthy", "version": settings.VERSION}
+
+class TaskPayload(BaseModel):
+    task_id: str = Field(..., description="Unique task identifier")
+    prompt: str = Field(..., description="Core content topic or prompt to process")
+    metadata: Optional[Dict[str, Any]] = Field(default_factory=dict, description="Optional task metadata")
+
+
+@app.get("/")
+async def root():
+    """Health check endpoint."""
+    return {"status": "online", "system": "HMD Matrix Agentic Engine"}
+
 
 @app.post("/api/v1/tasks", status_code=status.HTTP_202_ACCEPTED)
-async def submit_task(request: AgentRequest):
-    """
-    Submits a task to the background queue for asynchronous processing.
-    """
-    logger.info(f"Received API request to enqueue task: {request.task_id}")
+async def enqueue_task(payload: TaskPayload):
+    """Enqueues a new agent task into the Redis task queue."""
+    logger.info(f"Received API request to enqueue task: {payload.task_id}")
     
-    try:
-        # Push the task to the Redis queue instead of processing it directly
-        await task_queue.enqueue_task(queue_name="agent_tasks", request=request)
-        
-        # Return a 202 Accepted response indicating the task is queued
-        return {"task_id": request.task_id, "status": "queued", "message": "Task submitted successfully."}
+    task_data = {
+        "task_id": payload.task_id,
+        "prompt": payload.prompt,
+        "metadata": payload.metadata
+    }
+    
+    await queue.push_task("agent_tasks", task_data)
+    await queue.update_task_status(payload.task_id, "queued")
+    
+    return {
+        "task_id": payload.task_id,
+        "status": "queued",
+        "message": "Task submitted successfully."
+    }
 
-    except Exception as e:
-        logger.error(f"Failed to enqueue task {request.task_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error during task queuing.")
 
-@app.get("/api/v1/tasks/{task_id}", response_model=AgentResponse)
-async def get_task_result(task_id: str):
-    """
-    Retrieves the execution result of a specific task from the Redis cache.
-    """
-    try:
-        result = await task_queue.get_result(task_id)
-        
-        if not result:
-            # If the result isn't in Redis yet, it might still be processing or it doesn't exist
-            return JSONResponse(
-                status_code=status.HTTP_404_NOT_FOUND, 
-                content={"task_id": task_id, "status": "processing_or_not_found"}
-            )
-            
-        return result
+@app.get("/api/v1/tasks/{task_id}")
+async def get_queue_task_status(task_id: str):
+    """Checks the real-time status and cached result of a task from Redis."""
+    task_data = await queue.get_task_status(task_id)
+    if not task_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task '{task_id}' not found in active queue cache."
+        )
+    return task_data
 
-    except Exception as e:
-        logger.error(f"Error retrieving result for task {task_id}: {str(e)}")
-        raise HTTPException(status_code=500, detail="Internal server error while fetching results.")
+
+@app.get("/api/v1/history")
+async def fetch_history():
+    """Retrieves all processed content tasks from permanent database storage."""
+    history = await get_all_task_history()
+    return {"count": len(history), "tasks": history}
+
+
+@app.get("/api/v1/history/{task_id}")
+async def fetch_task_history(task_id: str):
+    """Retrieves a specific processed content task from permanent database storage."""
+    record = await get_task_history_by_id(task_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Task record '{task_id}' not found in database."
+        )
+    return record   
