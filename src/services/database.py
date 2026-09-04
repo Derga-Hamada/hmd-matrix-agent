@@ -32,15 +32,25 @@ async def init_db():
 
 
 async def persist_task_result(task_id: str, research: dict, script: dict, social: dict):
-    """Commits the final executed task to the database."""
+    """Commits or updates the final executed task in the database."""
     async with AsyncSessionLocal() as session:
-        record = TaskRecord(
-            task_id=task_id,
-            research_output=json.dumps(research),
-            script_output=json.dumps(script),
-            social_output=json.dumps(social)
-        )
-        session.add(record)
+        result = await session.execute(select(TaskRecord).where(TaskRecord.task_id == task_id))
+        record = result.scalar_one_or_none()
+
+        if record:
+            record.research_output = json.dumps(research)
+            record.script_output = json.dumps(script)
+            record.social_output = json.dumps(social)
+            record.status = "success"
+        else:
+            record = TaskRecord(
+                task_id=task_id,
+                research_output=json.dumps(research),
+                script_output=json.dumps(script),
+                social_output=json.dumps(social)
+            )
+            session.add(record)
+
         await session.commit()
 
 

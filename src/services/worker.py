@@ -1,11 +1,12 @@
 """
 Background worker process for executing queued agent tasks with transient error retries,
-database persistence, and webhook notifications.
+exponential backoff, database persistence, and webhook notifications.
 """
 
 import asyncio
 import json
 import logging
+import random
 from src.agents.researcher import ResearchAgent
 from src.agents.writer import WriterAgent
 from src.agents.social import SocialAgent
@@ -17,17 +18,20 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("hmd_matrix")
 
 
-async def run_agent_with_retry(agent, prompt: str, max_retries: int = 3):
-    """Executes an agent with retries on transient errors (429 Rate Limits or 503 High Demand)."""
+async def run_agent_with_retry(agent, prompt: str, max_retries: int = 5):
+    """Executes an agent with exponential backoff and jitter on transient errors."""
     for attempt in range(1, max_retries + 1):
         result = await agent.process(prompt)
         
         err_msg = str(result.get("error", "")) if isinstance(result, dict) else ""
         
         if any(code in err_msg for code in ["429", "503", "UNAVAILABLE", "RESOURCE_EXHAUSTED", "high demand"]):
-            wait_time = attempt * 5
+            base_backoff = 2 ** attempt
+            jitter = random.uniform(0.5, 1.5)
+            wait_time = base_backoff * jitter
+            
             logger.warning(
-                f"Transient API issue on {agent.name}. Retrying in {wait_time}s "
+                f"Transient API issue on {agent.name}. Retrying in {wait_time:.2f}s "
                 f"(Attempt {attempt}/{max_retries})..."
             )
             await asyncio.sleep(wait_time)
@@ -43,9 +47,10 @@ async def main():
     queue = TaskQueue()
     await queue.connect()
 
-    research_agent = ResearchAgent(model_name="gemini-flash-latest")
-    writer_agent = WriterAgent(model_name="gemini-flash-latest")
-    social_agent = SocialAgent(model_name="gemini-flash-latest")
+    # Updated model string to gemini-3.6-flash
+    research_agent = ResearchAgent(model_name="gemini-3.6-flash")
+    writer_agent = WriterAgent(model_name="gemini-3.6-flash")
+    social_agent = SocialAgent(model_name="gemini-3.6-flash")
 
     logger.info("Worker process initialized. Listening on queue: 'agent_tasks'...")
 
@@ -98,7 +103,7 @@ async def main():
                 # Persist to SQLite Database
                 await persist_task_result(task_id, research_res, writer_res, social_res)
                 
-                # Fire Webhook Notification if provided in metadata
+                # Fire Webhook Notification if provided
                 if webhook_url:
                     await send_webhook_notification(webhook_url, task_id, "success", final_result)
 
